@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-import plotly.graph_objects as go
 from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 import warnings
@@ -12,10 +11,187 @@ warnings.filterwarnings('ignore')
 # Page config
 # ──────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="World Cup Match Predictor",
+    page_title="Nic's World Cup Match Predictor",
     page_icon="⚽",
     layout="wide",
 )
+
+# ──────────────────────────────────────────────────────────────────────────
+# Design system — "night-match broadcast" aesthetic
+#   deep pitch background · chalk lines · electric-lime accent ·
+#   condensed sports typography (Anton / Oswald) · tabular stat type
+# ──────────────────────────────────────────────────────────────────────────
+LIME = "#CCFF00"
+HOME = "#19E3A0"   # vivid teal-green
+DRAW = "#8A99A0"   # slate
+AWAY = "#FF5B47"   # vivid red
+INK = "#0A1410"
+PANEL = "#10211A"
+MUTED = "#7E9088"
+
+st.markdown(
+    """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Anton&family=Oswald:wght@400;500;600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Space+Mono:wght@400;700&display=swap');
+      /* ----- base canvas: pitch at night ----- */
+      .stApp {
+        background:
+          radial-gradient(1200px 600px at 12% -10%, rgba(204,255,0,0.07), transparent 60%),
+          radial-gradient(1000px 700px at 100% 0%, rgba(25,227,160,0.06), transparent 55%),
+          repeating-linear-gradient(90deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 120px),
+          linear-gradient(180deg, #0A1410 0%, #081410 100%);
+        color: #E8F0EC;
+      }
+      /* subtle film grain */
+      .stApp::before {
+        content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+        opacity: 0.035;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      }
+      .block-container { padding-top: 2.2rem; max-width: 1180px; position: relative; z-index: 1; }
+
+      /* ----- hide default streamlit chrome ----- */
+      #MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; height: 0; }
+
+      /* ----- typography ----- */
+      html, body, [class*="css"], .stMarkdown, p, label, span, div {
+        font-family: 'DM Sans', system-ui, sans-serif;
+      }
+
+      /* ----- hero banner ----- */
+      .wc-hero {
+        position: relative; margin: 0 0 1.6rem 0; padding: 2.2rem 2.4rem 2rem;
+        border: 1px solid rgba(204,255,0,0.18);
+        border-radius: 18px; overflow: hidden;
+        background:
+          linear-gradient(120deg, rgba(204,255,0,0.10), transparent 42%),
+          radial-gradient(600px 200px at 90% 120%, rgba(25,227,160,0.12), transparent),
+          #0C1B15;
+      }
+      .wc-hero::after {  /* center-circle pitch motif */
+        content: ""; position: absolute; right: -90px; top: 50%; transform: translateY(-50%);
+        width: 260px; height: 260px; border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.06);
+        box-shadow: 0 0 0 1px rgba(204,255,0,0.05);
+      }
+      .wc-kicker {
+        font-family: 'Oswald', sans-serif; font-weight: 600; letter-spacing: 0.42em;
+        text-transform: uppercase; font-size: 0.72rem; color: #CCFF00; margin: 0 0 0.5rem;
+      }
+      .wc-title {
+        font-family: 'Anton', sans-serif; font-weight: 400; letter-spacing: 0.01em;
+        text-transform: uppercase; line-height: 0.92;
+        font-size: clamp(2.6rem, 6vw, 4.4rem); margin: 0; color: #F4FBF6;
+        text-shadow: 0 2px 30px rgba(0,0,0,0.4);
+      }
+      .wc-title em { font-style: normal; color: #CCFF00; }
+      .wc-sub { color: #9FB2A8; font-size: 0.98rem; max-width: 640px; margin: 0.85rem 0 0; line-height: 1.5; }
+
+      /* ----- tabs as broadcast nav ----- */
+      .stTabs [data-baseweb="tab-list"] { gap: 0.4rem; border-bottom: 1px solid rgba(255,255,255,0.07); }
+      .stTabs [data-baseweb="tab"] {
+        font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 0.12em;
+        font-weight: 600; font-size: 0.82rem; color: #7E9088; padding: 0.6rem 0.2rem;
+      }
+      .stTabs [aria-selected="true"] { color: #F4FBF6 !important; }
+      .stTabs [data-baseweb="tab-highlight"] { background: #CCFF00; height: 3px; }
+
+      /* ----- section labels ----- */
+      .stSelectbox label, .stCheckbox label p {
+        font-family: 'Oswald', sans-serif !important; text-transform: uppercase;
+        letter-spacing: 0.14em; font-size: 0.72rem !important; color: #8FA399 !important; font-weight: 600;
+      }
+      /* selectbox / input shells */
+      .stSelectbox [data-baseweb="select"] > div {
+        background: #0E1D17; border: 1px solid rgba(255,255,255,0.09); border-radius: 12px;
+        transition: border-color .18s ease, box-shadow .18s ease;
+      }
+      .stSelectbox [data-baseweb="select"] > div:hover { border-color: rgba(204,255,0,0.4); }
+      .stSelectbox [data-baseweb="select"] > div:focus-within {
+        border-color: #CCFF00; box-shadow: 0 0 0 3px rgba(204,255,0,0.14);
+      }
+
+      /* ----- primary button ----- */
+      .stButton > button {
+        font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 0.16em;
+        font-weight: 700; font-size: 0.92rem; color: #08140F !important;
+        background: #CCFF00; border: 0; border-radius: 12px; padding: 0.7rem 2.2rem;
+        box-shadow: 0 8px 24px rgba(204,255,0,0.22); transition: transform .15s ease, box-shadow .15s ease;
+      }
+      .stButton > button:hover {
+        transform: translateY(-2px); background: #D8FF33;
+        box-shadow: 0 12px 32px rgba(204,255,0,0.34); color: #08140F !important;
+      }
+      .stButton > button:active { transform: translateY(0); }
+
+      /* ----- metric cards (model tab) ----- */
+      [data-testid="stMetric"] {
+        background: #0E1D17; border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 14px; padding: 1rem 1.2rem;
+      }
+      [data-testid="stMetricLabel"] p {
+        font-family: 'Oswald', sans-serif !important; text-transform: uppercase;
+        letter-spacing: 0.12em; font-size: 0.7rem !important; color: #8FA399 !important;
+      }
+      [data-testid="stMetricValue"] { font-family: 'Anton', sans-serif; color: #F4FBF6; }
+
+      /* ----- scoreboard result ----- */
+      .wc-board {
+        display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 1rem;
+        padding: 1.8rem 2rem; border-radius: 18px; margin: 0.4rem 0 1.4rem;
+        background: linear-gradient(180deg, #0E1D17, #0B1813);
+        border: 1px solid rgba(255,255,255,0.08);
+      }
+      .wc-side { text-align: center; }
+      .wc-side .name {
+        font-family: 'Oswald', sans-serif; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.06em; font-size: 1rem; color: #C7D6CE; margin-bottom: 0.3rem;
+      }
+      .wc-side .pct { font-family: 'Anton', sans-serif; font-size: 3.6rem; line-height: 1; }
+      .wc-vs {
+        font-family: 'Oswald', sans-serif; font-weight: 700; color: #5E6F67;
+        text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.8rem;
+        border-left: 1px solid rgba(255,255,255,0.08); border-right: 1px solid rgba(255,255,255,0.08);
+        padding: 0 1.4rem;
+      }
+      .wc-vs .draw-pct { display:block; font-family:'Anton',sans-serif; font-size:1.5rem; color:#B7C4BC; margin-top:0.2rem; }
+
+      /* possession-style stacked probability bar */
+      .wc-bar { display: flex; height: 16px; border-radius: 8px; overflow: hidden; margin: 0.2rem 0 0.6rem;
+                box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
+      .wc-bar span { display: block; height: 100%; }
+      .wc-legend { display:flex; justify-content:space-between; font-family:'Space Mono',monospace;
+                   font-size:0.74rem; color:#8FA399; letter-spacing:0.02em; }
+
+      .wc-verdict {
+        font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 0.14em;
+        font-size: 0.82rem; color: #08140F; background: #CCFF00; display: inline-block;
+        padding: 0.45rem 1rem; border-radius: 999px; font-weight: 700; margin-bottom: 0.2rem;
+      }
+      .wc-empty {
+        border: 1px dashed rgba(255,255,255,0.14); border-radius: 14px; padding: 1.4rem 1.6rem;
+        color: #8FA399; font-size: 0.95rem; background: rgba(255,255,255,0.015);
+      }
+      hr { border-color: rgba(255,255,255,0.07) !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def style_plotly(fig, title=None):
+    """Apply the broadcast theme to any Plotly figure."""
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="DM Sans, sans-serif", color="#A9BBB1", size=13),
+        title=dict(text=title, font=dict(family="Oswald, sans-serif", color="#E8F0EC", size=16)) if title else None,
+        margin=dict(l=10, r=10, t=50 if title else 20, b=10),
+        xaxis=dict(gridcolor="rgba(255,255,255,0.05)", zerolinecolor="rgba(255,255,255,0.08)"),
+        yaxis=dict(gridcolor="rgba(255,255,255,0.05)", zerolinecolor="rgba(255,255,255,0.08)"),
+    )
+    return fig
+
 
 CLASS_NAMES = ['Home win', 'Draw', 'Away win']
 WINDOW = 5  # rolling form window
@@ -183,10 +359,15 @@ def predict_match(model, team_log, home, away, neutral, tourn_importance):
 # ──────────────────────────────────────────────────────────────────────────
 # UI
 # ──────────────────────────────────────────────────────────────────────────
-st.title("⚽ World Cup Match Predictor")
-st.caption(
-    "XGBoost model trained on international match results since 2000. "
-    "Pick two teams and a match context to see predicted outcome probabilities."
+st.markdown(
+    """
+<div class="wc-hero">
+<p class="wc-kicker">Match-day intelligence</p>
+<h1 class="wc-title">World Cup<br>Match <em>Predictor</em></h1>
+<p class="wc-sub">An XGBoost model trained on every international result since 2000. Pick two sides and a match context to read the predicted outcome probabilities.</p>
+</div>
+    """,
+    unsafe_allow_html=True,
 )
 
 raw_df = load_raw_data()
@@ -227,29 +408,29 @@ with tab_predict:
         if proba is None:
             st.error("No form history found for one of these teams — try a different matchup.")
         else:
+            p_home, p_draw, p_away = (proba * 100)
             labels = [f"{home_team} win", "Draw", f"{away_team} win"]
-            colors = ["#27AE60", "#999999", "#E74C3C"]
-
             pick_idx = int(np.argmax(proba))
-            st.success(f"🏆 Most likely outcome: **{labels[pick_idx]}** ({proba[pick_idx]*100:.1f}%)")
+            venue_line = "Neutral venue" if neutral else f"{home_team} hosting"
 
-            cols = st.columns(3)
-            for c, label, p, color in zip(cols, labels, proba, colors):
-                with c:
-                    st.metric(label, f"{p*100:.1f}%")
-
-            fig = go.Figure(go.Bar(
-                x=labels, y=proba * 100, marker_color=colors, text=[f"{p*100:.1f}%" for p in proba],
-                textposition='outside',
-            ))
-            fig.update_layout(
-                yaxis_title="Probability (%)", yaxis_range=[0, 100],
-                showlegend=False, height=380,
-                title=f"{home_team} vs {away_team} — {'Neutral venue' if neutral else f'{home_team} hosting'}",
+            st.markdown(
+                f"""
+<div class="wc-verdict">🏆 {labels[pick_idx]} &nbsp;·&nbsp; {proba[pick_idx]*100:.1f}%</div>
+<div class="wc-board">
+<div class="wc-side"><div class="name">{home_team}</div><div class="pct" style="color:{HOME}">{p_home:.1f}<span style="font-size:1.4rem">%</span></div></div>
+<div class="wc-vs">VS<span class="draw-pct">{p_draw:.0f}%</span>draw</div>
+<div class="wc-side"><div class="name">{away_team}</div><div class="pct" style="color:{AWAY}">{p_away:.1f}<span style="font-size:1.4rem">%</span></div></div>
+</div>
+<div class="wc-bar"><span style="width:{p_home}%;background:{HOME}"></span><span style="width:{p_draw}%;background:{DRAW}"></span><span style="width:{p_away}%;background:{AWAY}"></span></div>
+<div class="wc-legend"><span style="color:{HOME}">● {home_team}</span><span>● Draw — {venue_line}</span><span style="color:{AWAY}">{away_team} ●</span></div>
+                """,
+                unsafe_allow_html=True,
             )
-            st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Pick two teams above and click **Predict result**.")
+        st.markdown(
+            '<div class="wc-empty">Pick two teams above and hit <b>Predict result</b> to read the odds.</div>',
+            unsafe_allow_html=True,
+        )
 
 # ── Model performance tab ──────────────────────────────────────────────
 with tab_model:
@@ -273,12 +454,13 @@ with tab_model:
     with col1:
         st.subheader("Confusion matrix (row-normalized)")
         fig_cm = px.imshow(
-            metrics['cm'], x=CLASS_NAMES, y=CLASS_NAMES, color_continuous_scale="Blues",
+            metrics['cm'], x=CLASS_NAMES, y=CLASS_NAMES,
+            color_continuous_scale=[[0, INK], [0.5, "#1F5C3E"], [1, LIME]],
             text_auto=".2f", zmin=0, zmax=1,
             labels=dict(x="Predicted", y="Actual", color="Proportion"),
         )
         fig_cm.update_layout(height=400)
-        st.plotly_chart(fig_cm, use_container_width=True)
+        st.plotly_chart(style_plotly(fig_cm), use_container_width=True)
 
     with col2:
         st.subheader("Feature importance")
@@ -287,7 +469,8 @@ with tab_model:
             x=importances.values, y=importances.index, orientation='h',
             labels={'x': 'Importance (gain)', 'y': ''},
         )
+        fig_imp.update_traces(marker_color=LIME)
         fig_imp.update_layout(height=400)
-        st.plotly_chart(fig_imp, use_container_width=True)
+        st.plotly_chart(style_plotly(fig_imp), use_container_width=True)
 
     st.caption("Label scheme: 0 = home win, 1 = draw, 2 = away win.")
