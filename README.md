@@ -4,6 +4,9 @@ Predict the outcome of any international football matchup — **home win, draw, 
 
 Pick two teams, set the match context, and read the predicted probabilities in a clean broadcast-style UI.
 
+### 🔴 [**Try it live → nics-world-cup-predictor.streamlit.app**](https://nics-world-cup-predictor.streamlit.app/)
+
+![Live App](https://img.shields.io/badge/Live%20Demo-Streamlit%20Cloud-CCFF00?logo=streamlit&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Built%20with-Streamlit-FF4B4B)
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![Model](https://img.shields.io/badge/Model-XGBoost-CCFF00)
@@ -50,3 +53,4 @@ App opens at `http://localhost:8501`. Match history downloads automatically on f
 
 - Predictions reflect each team's **most recent form** in the dataset, not live squad/injury data.
 - A draw is genuinely common in football, so a high draw probability is expected for evenly matched sides.
+- The live app sleeps after inactivity on Streamlit Cloud — the **first load may take ~90s** while it wakes and trains the model. It's instant after that.
