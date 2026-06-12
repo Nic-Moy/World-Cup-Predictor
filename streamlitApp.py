@@ -285,7 +285,7 @@ def engineer_features(df):
 # ──────────────────────────────────────────────────────────────────────────
 # Model training (cached as a resource so it persists across reruns)
 # ──────────────────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Training XGBoost model...")
+@st.cache_resource(show_spinner="Training XGBoost model... (about 45 seconds)")
 def train_model(model_df):
     X = model_df[FEATURES]
     y = model_df['result']
@@ -362,8 +362,8 @@ def predict_match(model, team_log, home, away, neutral, tourn_importance):
 st.markdown(
     """
 <div class="wc-hero">
-<p class="wc-kicker">Match-day intelligence</p>
-<h1 class="wc-title">World Cup<br>Match <em>Predictor</em></h1>
+<p class="wc-kicker">For the Deli 🫡</p>
+<h1 class="wc-title">Nic's World Cup<br>Match <em>Predictor</em></h1>
 <p class="wc-sub">An XGBoost model trained on every international result since 2000. Pick two sides and a match context to read the predicted outcome probabilities.</p>
 </div>
     """,
