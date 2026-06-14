@@ -2,8 +2,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+import world_cup_predictor as wc  # shared model + feature pipeline (single source of truth)
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -165,8 +164,8 @@ st.markdown(
 
       .wc-verdict {
         font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 0.14em;
-        font-size: 0.82rem; color: #08140F; background: #CCFF00; display: inline-block;
-        padding: 0.45rem 1rem; border-radius: 999px; font-weight: 700; margin-bottom: 0.2rem;
+        font-size: 1.05rem; color: #08140F; background: #CCFF00; display: inline-block;
+        padding: 0.6rem 1.4rem; border-radius: 999px; font-weight: 700; margin-bottom: 0.4rem;
       }
       .wc-empty {
         border: 1px dashed rgba(255,255,255,0.14); border-radius: 14px; padding: 1.4rem 1.6rem;
@@ -193,168 +192,24 @@ def style_plotly(fig, title=None):
     return fig
 
 
-CLASS_NAMES = ['Home win', 'Draw', 'Away win']
-WINDOW = 5  # rolling form window
-
-MAJOR = ['FIFA World Cup', 'UEFA Euro', 'Copa América', 'African Cup of Nations',
-         'AFC Asian Cup', 'UEFA Nations League', 'CONCACAF Nations League']
-
-DATA_URL = 'https://raw.githubusercontent.com/martj42/international_results/master/results.csv'
-
-
 # ──────────────────────────────────────────────────────────────────────────
-# Data loading + feature engineering (cached so it only runs once)
+# Model pipeline — thin cached wrappers around the shared module
+# (all feature/model logic lives in world_cup_predictor.py; the app only adds
+#  Streamlit caching so each step runs once and is shared across visitors)
 # ──────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Downloading match history...")
 def load_raw_data():
-    raw = pd.read_csv(DATA_URL, parse_dates=['date'])
-    df = raw.dropna(subset=['home_score', 'away_score']).copy()
-    df['home_score'] = df['home_score'].astype(int)
-    df['away_score'] = df['away_score'].astype(int)
-    df = df[df['date'] >= '2000-01-01'].sort_values('date').reset_index(drop=True)
-    return df
-
-
-def build_team_log(matches):
-    sides = {
-        'home': ('home_team', 'home_score', 'away_score'),
-        'away': ('away_team', 'away_score', 'home_score'),
-    }
-    frames = []
-    for side, (tcol, gf, ga) in sides.items():
-        f = matches[['match_id', 'date', tcol, gf, ga]].copy()
-        f.columns = ['match_id', 'date', 'team', 'goals_for', 'goals_against']
-        f['side'] = side
-        frames.append(f)
-    log = pd.concat(frames).sort_values('date').reset_index(drop=True)
-    log['gd'] = log['goals_for'] - log['goals_against']
-    log['pts'] = np.select([log['gd'] > 0, log['gd'] == 0], [3, 1], default=0)
-    return log
-
-
-def importance(t):
-    if t == 'Friendly':
-        return 0
-    if any(t == m for m in MAJOR):
-        return 2
-    return 1
-
-
-FEATURES = [
-    'form_pts_diff', 'form_gd_diff', 'exp_diff',
-    'home_form_pts', 'home_form_gd', 'away_form_pts', 'away_form_gd',
-    'is_home_advantage', 'is_neutral', 'tournament_importance',
-]
+    return wc.load_raw_data()
 
 
 @st.cache_data(show_spinner="Engineering features...")
 def engineer_features(df):
-    df = df.copy()
-    conditions = [df['home_score'] > df['away_score'], df['home_score'] == df['away_score']]
-    df['result'] = np.select(conditions, [0, 1], default=2)
-    df['match_id'] = df.index
-
-    team_log = build_team_log(df)
-    g = team_log.groupby('team')
-    team_log['form_pts'] = g['pts'].transform(lambda s: s.shift().rolling(WINDOW, min_periods=1).mean())
-    team_log['form_gd'] = g['gd'].transform(lambda s: s.shift().rolling(WINDOW, min_periods=1).mean())
-    team_log['matches_played'] = g.cumcount()
-
-    home_feats = (team_log[team_log['side'] == 'home']
-                  .set_index('match_id')[['form_pts', 'form_gd', 'matches_played']]
-                  .rename(columns=lambda c: 'home_' + c))
-    away_feats = (team_log[team_log['side'] == 'away']
-                  .set_index('match_id')[['form_pts', 'form_gd', 'matches_played']]
-                  .rename(columns=lambda c: 'away_' + c))
-
-    data = df.set_index('match_id').join(home_feats).join(away_feats)
-
-    data['form_pts_diff'] = data['home_form_pts'] - data['away_form_pts']
-    data['form_gd_diff'] = data['home_form_gd'] - data['away_form_gd']
-    data['exp_diff'] = data['home_matches_played'] - data['away_matches_played']
-    data['is_home_advantage'] = (~data['neutral']).astype(int)
-    data['is_neutral'] = data['neutral'].astype(int)
-    data['tournament_importance'] = data['tournament'].apply(importance)
-
-    model_df = data.dropna(subset=['home_form_pts', 'away_form_pts']).copy()
-    model_df = model_df.sort_values('date')
-
-    return model_df, team_log
+    return wc.engineer_features(df)
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Model training (cached as a resource so it persists across reruns)
-# ──────────────────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Training XGBoost model... (about 45 seconds)")
 def train_model(model_df):
-    X = model_df[FEATURES]
-    y = model_df['result']
-
-    split_idx = int(len(model_df) * 0.8)
-    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
-
-    majority_class = y_train.mode()[0]
-    baseline_acc = (y_test == majority_class).mean()
-
-    model = XGBClassifier(
-        objective='multi:softprob', num_class=3,
-        n_estimators=300, max_depth=4, learning_rate=0.05,
-        subsample=0.9, colsample_bytree=0.9, random_state=42, eval_metric='mlogloss',
-    )
-    model.fit(X_train, y_train)
-
-    y_pred = model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    macro_f1 = f1_score(y_test, y_pred, average='macro')
-    cm = confusion_matrix(y_test, y_pred, normalize='true')
-
-    metrics = {
-        'baseline_acc': baseline_acc,
-        'acc': acc,
-        'macro_f1': macro_f1,
-        'cm': cm,
-        'n_train': len(X_train),
-        'n_test': len(X_test),
-        'split_date': model_df['date'].iloc[split_idx].date(),
-    }
-    return model, metrics
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Prediction helper
-# ──────────────────────────────────────────────────────────────────────────
-def latest_form(team_log, team):
-    rows = team_log[team_log['team'] == team].dropna(subset=['form_pts'])
-    if rows.empty:
-        return None
-    last = rows.sort_values('date').iloc[-1]
-    return last['form_pts'], last['form_gd'], last['matches_played']
-
-
-def predict_match(model, team_log, home, away, neutral, tourn_importance):
-    h = latest_form(team_log, home)
-    a = latest_form(team_log, away)
-    if h is None or a is None:
-        return None
-
-    h_pts, h_gd, h_exp = h
-    a_pts, a_gd, a_exp = a
-
-    row = pd.DataFrame([{
-        'form_pts_diff': h_pts - a_pts,
-        'form_gd_diff': h_gd - a_gd,
-        'exp_diff': h_exp - a_exp,
-        'home_form_pts': h_pts, 'home_form_gd': h_gd,
-        'away_form_pts': a_pts, 'away_form_gd': a_gd,
-        'is_home_advantage': 0 if neutral else 1,
-        'is_neutral': 1 if neutral else 0,
-        'tournament_importance': tourn_importance,
-    }])[FEATURES]
-
-    proba = model.predict_proba(row)[0]
-    return proba
-
+    return wc.train_model(model_df)
 
 # ──────────────────────────────────────────────────────────────────────────
 # UI
@@ -371,7 +226,7 @@ st.markdown(
 )
 
 raw_df = load_raw_data()
-model_df, team_log = engineer_features(raw_df)
+model_df, team_log, final_elo = engineer_features(raw_df)
 model, metrics = train_model(model_df)
 
 teams = sorted(team_log['team'].unique())
@@ -403,7 +258,7 @@ with tab_predict:
     st.divider()
 
     if st.button("Predict result", type="primary", use_container_width=False):
-        proba = predict_match(model, team_log, home_team, away_team, neutral, tourn_importance)
+        proba = wc.predict_match(model, team_log, final_elo, home_team, away_team, neutral, tourn_importance)
 
         if proba is None:
             st.error("No form history found for one of these teams — try a different matchup.")
@@ -442,6 +297,10 @@ with tab_model:
     c3.metric("Macro-F1", f"{metrics['macro_f1']:.3f}")
     c4.metric("Lift over baseline", f"{(metrics['acc']-metrics['baseline_acc'])*100:+.1f} pp")
 
+    c5, c6, _, _ = st.columns(4)
+    c5.metric("Draw recall", f"{metrics['draw_recall']*100:.1f}%", help="Share of actual draws the model correctly calls.")
+    c6.metric("Log-loss", f"{metrics['log_loss']:.3f}", help="Probability quality — lower is better.")
+
     st.caption(
         f"Trained on {metrics['n_train']:,} matches up to {metrics['split_date']}, "
         f"tested on {metrics['n_test']:,} matches after that date."
@@ -454,7 +313,7 @@ with tab_model:
     with col1:
         st.subheader("Confusion matrix (row-normalized)")
         fig_cm = px.imshow(
-            metrics['cm'], x=CLASS_NAMES, y=CLASS_NAMES,
+            metrics['cm'], x=wc.CLASS_NAMES, y=wc.CLASS_NAMES,
             color_continuous_scale=[[0, INK], [0.5, "#1F5C3E"], [1, LIME]],
             text_auto=".2f", zmin=0, zmax=1,
             labels=dict(x="Predicted", y="Actual", color="Proportion"),
@@ -464,7 +323,7 @@ with tab_model:
 
     with col2:
         st.subheader("Feature importance")
-        importances = pd.Series(model.feature_importances_, index=FEATURES).sort_values()
+        importances = pd.Series(model.feature_importances_, index=wc.FEATURES).sort_values()
         fig_imp = px.bar(
             x=importances.values, y=importances.index, orientation='h',
             labels={'x': 'Importance (gain)', 'y': ''},
